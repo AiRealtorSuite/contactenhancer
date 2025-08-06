@@ -14,7 +14,7 @@ app = FastAPI()
 
 # Set up templates and static files
 templates = Jinja2Templates(directory="templates")
-app.mount("/static", StaticFiles(directory="static"), name="static")
+# app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Allow CORS for testing/local dev
 app.add_middleware(
