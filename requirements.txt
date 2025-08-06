@@ -1,5 +1,7 @@
 fastapi
 uvicorn
+requests
 pandas
-jinja2
+beautifulsoup4
+aiofiles
 python-multipart
