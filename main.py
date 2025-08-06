@@ -1,8 +1,7 @@
-from fastapi import FastAPI, UploadFile, File, Form
+from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import FileResponse, HTMLResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.templating import Jinja2Templates
+from fastapi.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 
 import pandas as pd
@@ -12,11 +11,10 @@ import uuid
 
 app = FastAPI()
 
-# Set up templates and static files
+# Templates directory setup
 templates = Jinja2Templates(directory="templates")
-app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# Allow CORS for testing/local dev
+# Allow any frontend for dev purposes
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -25,7 +23,7 @@ app.add_middleware(
 )
 
 @app.get("/", response_class=HTMLResponse)
-async def form_post(request: Request):
+async def form_get(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
 @app.post("/", response_class=HTMLResponse)
@@ -34,10 +32,9 @@ async def handle_upload(request: Request, file: UploadFile = File(...)):
     with open(temp_file, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
-    # Load and enrich the file
     df = pd.read_csv(temp_file)
 
-    # Add dummy enrichment columns for now
+    # Dummy enrichment data for now
     df["Enriched Agent Phone"] = "555-123-4567"
     df["Enriched Agent Email"] = "agent@example.com"
 
@@ -49,9 +46,9 @@ async def handle_upload(request: Request, file: UploadFile = File(...)):
     return HTMLResponse(
         content=f"""
         <html>
-        <body style="text-align:center;font-family:sans-serif;">
+        <body style="text-align:center; font-family:sans-serif;">
             <h2>✅ Enrichment Complete</h2>
-            <a href="/download/{enriched_file}" download>Download Enriched File</a>
+            <a href="/download/{enriched_file}" download>Download Enriched CSV</a>
         </body>
         </html>
         """,
