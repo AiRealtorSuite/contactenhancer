@@ -1,7 +1,7 @@
 fastapi
 uvicorn
 jinja2
-python-multipart
 pandas
+python-multipart
 requests
-BeautifulSoup
+beautifulsoup4
