@@ -61,7 +61,7 @@ def scrape_contact_info(agent_name, city_state):
 
 @app.post("/", response_class=HTMLResponse)
 async def handle_upload(request: Request, file: UploadFile = File(...)):
-    temp_file = f"temp_{uuid.uuid4().hex}.csv"
+    temp_file = f"/tmp/temp_{uuid.uuid4().hex}.csv"
     with open(temp_file, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
@@ -79,10 +79,11 @@ async def handle_upload(request: Request, file: UploadFile = File(...)):
         df.at[i, "Enriched Agent Email"] = email
         time.sleep(2)
 
-    enriched_file = f"enriched_{uuid.uuid4().hex}.csv"
-    df.to_csv(enriched_file, index=False)
+    enriched_basename = f"enriched_{uuid.uuid4().hex}.csv"
+    enriched_path = f"/tmp/{enriched_basename}"
+    df.to_csv(enriched_path, index=False)
 
-    print(f"✅ File saved as: {enriched_file}")
+    print(f"✅ File saved as: {enriched_path}")
 
     os.remove(temp_file)
 
@@ -91,7 +92,7 @@ async def handle_upload(request: Request, file: UploadFile = File(...)):
         <html>
         <body style='text-align:center; font-family:sans-serif;'>
             <h2>✅ Enrichment Complete</h2>
-            <a href='/download/{enriched_file}' download>Download Enriched CSV</a>
+            <a href='/download/{enriched_basename}' download>Download Enriched CSV</a>
         </body>
         </html>
         """,
@@ -101,11 +102,13 @@ async def handle_upload(request: Request, file: UploadFile = File(...)):
 
 @app.get("/download/{filename}")
 async def download_file(filename: str):
-    if not os.path.exists(filename):
+    file_path = f"/tmp/{filename}"
+    if not os.path.exists(file_path):
+        print(f"🚫 File not found: {file_path}")
         return JSONResponse(status_code=404, content={"error": f"File '{filename}' not found."})
-    print(f"⬇️ Serving file: {filename}")
+    print(f"⬇️ Serving file: {file_path}")
     return FileResponse(
-        path=filename,
-        filename="enriched_contacts.csv",  # Consistent name for download
+        path=file_path,
+        filename="enriched_contacts.csv",
         media_type="text/csv"
     )
