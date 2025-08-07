@@ -1,5 +1,5 @@
 from fastapi import FastAPI, UploadFile, File
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.requests import Request
@@ -14,10 +14,8 @@ import time
 
 app = FastAPI()
 
-# Set up Jinja2 template rendering from /templates
 templates = Jinja2Templates(directory="templates")
 
-# Enable CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -44,7 +42,6 @@ def scrape_contact_info(agent_name, city_state):
             profile_resp = requests.get(profile_url, headers=headers, timeout=10)
             profile_soup = BeautifulSoup(profile_resp.text, "html.parser")
             
-            # Naive email and phone detection (very basic pattern match)
             email = None
             phone = None
             for tag in profile_soup.find_all(text=True):
@@ -70,7 +67,6 @@ async def handle_upload(request: Request, file: UploadFile = File(...)):
 
     df = pd.read_csv(temp_file)
 
-    # Ensure columns exist for output
     df["Enriched Agent Phone"] = ""
     df["Enriched Agent Email"] = ""
 
@@ -81,10 +77,12 @@ async def handle_upload(request: Request, file: UploadFile = File(...)):
         phone, email = scrape_contact_info(agent_name, address)
         df.at[i, "Enriched Agent Phone"] = phone
         df.at[i, "Enriched Agent Email"] = email
-        time.sleep(2)  # be respectful to avoid IP blocks
+        time.sleep(2)
 
     enriched_file = f"enriched_{uuid.uuid4().hex}.csv"
     df.to_csv(enriched_file, index=False)
+
+    print(f"✅ File saved as: {enriched_file}")
 
     os.remove(temp_file)
 
@@ -101,6 +99,13 @@ async def handle_upload(request: Request, file: UploadFile = File(...)):
     )
 
 
-@app.get("/download/{filename}", response_class=FileResponse)
+@app.get("/download/{filename}")
 async def download_file(filename: str):
-    return FileResponse(path=filename, filename=filename, media_type="text/csv")
+    if not os.path.exists(filename):
+        return JSONResponse(status_code=404, content={"error": f"File '{filename}' not found."})
+    print(f"⬇️ Serving file: {filename}")
+    return FileResponse(
+        path=filename,
+        filename=filename,
+        media_type="text/csv"
+    )
