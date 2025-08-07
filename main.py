@@ -12,6 +12,7 @@ import uuid
 import requests
 from bs4 import BeautifulSoup
 import time
+import asyncio
 
 app = FastAPI()
 
@@ -72,12 +73,10 @@ async def handle_upload(request: Request, file: UploadFile = File(...)):
     df["Enriched Agent Email"] = ""
 
     for i, row in df.iterrows():
-        # 👇 Flexible name support
+        # ✅ Smart fallback: use Agent Name, or fallback to First + Last
         first = str(row.get("First Name", "")).strip()
         last = str(row.get("Last Name", "")).strip()
-        agent_name = str(row.get("Agent Name", "")).strip()
-        if not agent_name:
-            agent_name = f"{first} {last}".strip()
+        agent_name = str(row.get("Agent Name", "")).strip() or f"{first} {last}".strip()
 
         address = str(row.get("Property Address", "")).strip()
         print(f"🔍 Searching for {agent_name} in {address}...")
@@ -106,6 +105,16 @@ async def handle_upload(request: Request, file: UploadFile = File(...)):
     )
 
 
+# 🧹 Delayed deletion for safe streaming
+async def delayed_remove(file_path):
+    await asyncio.sleep(1)  # let the response fully stream before deleting
+    try:
+        os.remove(file_path)
+        print(f"🧹 Deleted file after download: {file_path}")
+    except Exception as e:
+        print(f"⚠️ Could not delete file: {file_path} - {e}")
+
+
 @app.get("/download/{filename}")
 async def download_file(filename: str):
     file_path = f"/tmp/{filename}"
@@ -118,5 +127,5 @@ async def download_file(filename: str):
         path=file_path,
         filename="enriched_contacts.csv",
         media_type="text/csv",
-        background=BackgroundTask(os.remove, file_path)
+        background=BackgroundTask(delayed_remove, file_path)
     )
