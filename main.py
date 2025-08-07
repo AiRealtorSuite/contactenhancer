@@ -41,7 +41,7 @@ def scrape_contact_info(agent_name, city_state):
             profile_url = links[0]
             profile_resp = requests.get(profile_url, headers=headers, timeout=10)
             profile_soup = BeautifulSoup(profile_resp.text, "html.parser")
-            
+
             email = None
             phone = None
             for tag in profile_soup.find_all(text=True):
@@ -106,6 +106,6 @@ async def download_file(filename: str):
     print(f"⬇️ Serving file: {filename}")
     return FileResponse(
         path=filename,
-        filename=filename,
+        filename="enriched_contacts.csv",  # Consistent name for download
         media_type="text/csv"
     )
