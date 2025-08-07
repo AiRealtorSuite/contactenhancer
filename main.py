@@ -31,46 +31,36 @@ async def form_get(request: Request):
 
 
 def scrape_contact_info(agent_name, city_state):
-    query = f"{agent_name} realtor {city_state} site:realtor.com"
-    headers = {"User-Agent": "Mozilla/5.0"}
-    url = f"https://www.google.com/search?q={requests.utils.quote(query)}"
+    # Prepare slug for Realtor.com profile URL
+    city_slug = city_state.lower().replace(",", "").replace(" ", "-")
+    name_slug = agent_name.lower().replace(",", "").replace(".", "").replace(" ", "-")
+    profile_url = f"https://www.realtor.com/realestateagents/{city_slug}/{name_slug}"
 
-    print(f"🌐 Google search URL: {url}")
+    headers = {"User-Agent": "Mozilla/5.0"}
+    print(f"🌐 Checking Realtor.com profile: {profile_url}")
 
     try:
-        resp = requests.get(url, headers=headers, timeout=10)
+        resp = requests.get(profile_url, headers=headers, timeout=10)
         soup = BeautifulSoup(resp.text, "html.parser")
 
-        links = [a['href'] for a in soup.select('a[href^="http"]') if 'realtor.com' in a['href']]
-        print(f"🔗 Found {len(links)} realtor.com links")
+        email = None
+        phone = None
 
-        if links:
-            profile_url = links[0]
-            print(f"➡️ Visiting profile: {profile_url}")
-            profile_resp = requests.get(profile_url, headers=headers, timeout=10)
-            profile_soup = BeautifulSoup(profile_resp.text, "html.parser")
+        for tag in soup.find_all(text=True):
+            if "@" in tag and ".com" in tag:
+                email = tag.strip()
+            if any(x in tag for x in ["(", ")", "-", "."]):
+                digits = ''.join(c for c in tag if c.isdigit())
+                if len(digits) >= 10:
+                    phone = tag.strip()
+            if email and phone:
+                break
 
-            email = None
-            phone = None
-            for tag in profile_soup.find_all(text=True):
-                if "@" in tag and ".com" in tag:
-                    email = tag.strip()
-                if any(x in tag for x in ["(", ")", "- ", "-", "."]):
-                    digits = ''.join(c for c in tag if c.isdigit())
-                    if len(digits) >= 10:
-                        phone = tag.strip()
-                if email and phone:
-                    break
-
-            print(f"📞 Phone: {phone or 'None'}, 📧 Email: {email or 'None'}")
-            return phone or "", email or ""
-        else:
-            print("⚠️ No Realtor.com profile found.")
-
+        print(f"📞 Phone: {phone or 'None'}, 📧 Email: {email or 'None'}")
+        return phone or "", email or ""
     except Exception as e:
-        print(f"❌ Scraping error: {e}")
-
-    return "", ""
+        print(f"❌ Error accessing profile: {e}")
+        return "", ""
 
 
 @app.post("/", response_class=HTMLResponse)
@@ -88,8 +78,8 @@ async def handle_upload(request: Request, file: UploadFile = File(...)):
         first = str(row.get("First Name", "")).strip()
         last = str(row.get("Last Name", "")).strip()
         agent_name = str(row.get("Agent Name", "")).strip() or f"{first} {last}".strip()
-
         address = str(row.get("Property Address", "")).strip()
+
         print(f"🔍 Searching for {agent_name} in {address}...")
         phone, email = scrape_contact_info(agent_name, address)
         df.at[i, "Enriched Agent Phone"] = phone
