@@ -106,9 +106,18 @@ async def download_file(filename: str):
     if not os.path.exists(file_path):
         print(f"🚫 File not found: {file_path}")
         return JSONResponse(status_code=404, content={"error": f"File '{filename}' not found."})
+    
     print(f"⬇️ Serving file: {file_path}")
-    return FileResponse(
+    response = FileResponse(
         path=file_path,
         filename="enriched_contacts.csv",
         media_type="text/csv"
     )
+
+    try:
+        os.remove(file_path)
+        print(f"🧹 Deleted file after download: {file_path}")
+    except Exception as e:
+        print(f"⚠️ Could not delete file: {e}")
+
+    return response
