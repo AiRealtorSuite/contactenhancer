@@ -35,12 +35,18 @@ def scrape_contact_info(agent_name, city_state):
     headers = {"User-Agent": "Mozilla/5.0"}
     url = f"https://www.google.com/search?q={requests.utils.quote(query)}"
 
+    print(f"🌐 Google search URL: {url}")
+
     try:
         resp = requests.get(url, headers=headers, timeout=10)
         soup = BeautifulSoup(resp.text, "html.parser")
+
         links = [a['href'] for a in soup.select('a[href^="http"]') if 'realtor.com' in a['href']]
+        print(f"🔗 Found {len(links)} realtor.com links")
+
         if links:
             profile_url = links[0]
+            print(f"➡️ Visiting profile: {profile_url}")
             profile_resp = requests.get(profile_url, headers=headers, timeout=10)
             profile_soup = BeautifulSoup(profile_resp.text, "html.parser")
 
@@ -55,9 +61,15 @@ def scrape_contact_info(agent_name, city_state):
                         phone = tag.strip()
                 if email and phone:
                     break
+
+            print(f"📞 Phone: {phone or 'None'}, 📧 Email: {email or 'None'}")
             return phone or "", email or ""
+        else:
+            print("⚠️ No Realtor.com profile found.")
+
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"❌ Scraping error: {e}")
+
     return "", ""
 
 
@@ -73,7 +85,6 @@ async def handle_upload(request: Request, file: UploadFile = File(...)):
     df["Enriched Agent Email"] = ""
 
     for i, row in df.iterrows():
-        # ✅ Smart fallback: use Agent Name, or fallback to First + Last
         first = str(row.get("First Name", "")).strip()
         last = str(row.get("Last Name", "")).strip()
         agent_name = str(row.get("Agent Name", "")).strip() or f"{first} {last}".strip()
@@ -107,7 +118,7 @@ async def handle_upload(request: Request, file: UploadFile = File(...)):
 
 # 🧹 Delayed deletion for safe streaming
 async def delayed_remove(file_path):
-    await asyncio.sleep(1)  # let the response fully stream before deleting
+    await asyncio.sleep(1)
     try:
         os.remove(file_path)
         print(f"🧹 Deleted file after download: {file_path}")
