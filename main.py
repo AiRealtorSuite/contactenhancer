@@ -3,6 +3,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.requests import Request
+from starlette.background import BackgroundTask
 
 import pandas as pd
 import os
@@ -71,8 +72,14 @@ async def handle_upload(request: Request, file: UploadFile = File(...)):
     df["Enriched Agent Email"] = ""
 
     for i, row in df.iterrows():
-        agent_name = str(row.get("Agent Name", ""))
-        address = str(row.get("Property Address", ""))
+        # 👇 Flexible name support
+        first = str(row.get("First Name", "")).strip()
+        last = str(row.get("Last Name", "")).strip()
+        agent_name = str(row.get("Agent Name", "")).strip()
+        if not agent_name:
+            agent_name = f"{first} {last}".strip()
+
+        address = str(row.get("Property Address", "")).strip()
         print(f"🔍 Searching for {agent_name} in {address}...")
         phone, email = scrape_contact_info(agent_name, address)
         df.at[i, "Enriched Agent Phone"] = phone
@@ -84,7 +91,6 @@ async def handle_upload(request: Request, file: UploadFile = File(...)):
     df.to_csv(enriched_path, index=False)
 
     print(f"✅ File saved as: {enriched_path}")
-
     os.remove(temp_file)
 
     return HTMLResponse(
@@ -106,18 +112,11 @@ async def download_file(filename: str):
     if not os.path.exists(file_path):
         print(f"🚫 File not found: {file_path}")
         return JSONResponse(status_code=404, content={"error": f"File '{filename}' not found."})
-    
+
     print(f"⬇️ Serving file: {file_path}")
-    response = FileResponse(
+    return FileResponse(
         path=file_path,
         filename="enriched_contacts.csv",
-        media_type="text/csv"
+        media_type="text/csv",
+        background=BackgroundTask(os.remove, file_path)
     )
-
-    try:
-        os.remove(file_path)
-        print(f"🧹 Deleted file after download: {file_path}")
-    except Exception as e:
-        print(f"⚠️ Could not delete file: {e}")
-
-    return response
