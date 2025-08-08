@@ -1,6 +1,7 @@
 import os
 import csv
 import tempfile
+import time
 import requests
 from fastapi import FastAPI, File, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
@@ -48,30 +49,45 @@ async def enrich_contacts(file: UploadFile = File(...)):
                 continue
 
             print(f"🔍 Searching property ID: {mls_id}")
-            try:
-                response = requests.get(
-                    "https://us-real-estate-listings.p.rapidapi.com/properties/detail",
-                    headers={
-                        "X-RapidAPI-Key": RAPIDAPI_KEY,
-                        "X-RapidAPI-Host": "us-real-estate-listings.p.rapidapi.com"
-                    },
-                    params={"property_id": mls_id}
-                )
-                response.raise_for_status()
-                data = response.json()
 
-                agent = data.get("data", {}).get("advertisers", [{}])[0]
-                row["Agent Name"] = agent.get("name", "")
-                row["Agent Phone"] = agent.get("phone", "")
-                row["Agent Email"] = agent.get("email", "")
+            # Add light throttle
+            time.sleep(0.1)
 
-                print(f"✅ Found agent: {row['Agent Name']} | 📞 {row['Agent Phone']} | 📧 {row['Agent Email']}")
+            for attempt in range(3):
+                try:
+                    response = requests.get(
+                        "https://us-real-estate-listings.p.rapidapi.com/properties/detail",
+                        headers={
+                            "X-RapidAPI-Key": RAPIDAPI_KEY,
+                            "X-RapidAPI-Host": "us-real-estate-listings.p.rapidapi.com"
+                        },
+                        params={"property_id": mls_id}
+                    )
 
-            except requests.exceptions.RequestException as e:
-                print(f"❌ API error for MLS {mls_id}: {e}")
-                row["Agent Name"] = ""
-                row["Agent Phone"] = ""
-                row["Agent Email"] = ""
+                    if response.status_code == 429:
+                        print(f"⏳ Rate limit hit for {mls_id}, retrying in 2s... (Attempt {attempt + 1})")
+                        time.sleep(2)
+                        continue  # Retry
+
+                    response.raise_for_status()
+                    data = response.json()
+                    agent = data.get("data", {}).get("advertisers", [{}])[0]
+
+                    row["Agent Name"] = agent.get("name", "")
+                    row["Agent Phone"] = agent.get("phone", "")
+                    row["Agent Email"] = agent.get("email", "")
+
+                    print(f"✅ Found: {row['Agent Name']} | 📞 {row['Agent Phone']} | 📧 {row['Agent Email']}")
+                    break  # Success, break retry loop
+
+                except requests.exceptions.RequestException as e:
+                    if attempt == 2:
+                        print(f"❌ Failed after retries for MLS {mls_id}: {e}")
+                        row["Agent Name"] = ""
+                        row["Agent Phone"] = ""
+                        row["Agent Email"] = ""
+                    else:
+                        time.sleep(1)
 
             enriched_rows.append(row)
 
