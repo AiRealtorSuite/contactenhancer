@@ -20,8 +20,11 @@ app.add_middleware(
 
 @app.get("/")
 async def main():
-    with open("index.html") as f:
-        return HTMLResponse(f.read())
+    try:
+        with open(os.path.join(os.path.dirname(__file__), "templates", "index.html")) as f:
+            return HTMLResponse(f.read())
+    except FileNotFoundError:
+        return HTMLResponse("<h1>Internal Server Error: index.html not found</h1>", status_code=500)
 
 @app.post("/")
 async def enrich_contacts(file: UploadFile = File(...)):
