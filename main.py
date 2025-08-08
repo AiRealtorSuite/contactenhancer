@@ -1,117 +1,102 @@
-from fastapi import FastAPI, UploadFile, File
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
-from fastapi.templating import Jinja2Templates
-from fastapi.middleware.cors import CORSMiddleware
-from starlette.requests import Request
-
-import pandas as pd
 import os
-import shutil
+import csv
 import uuid
-import requests
-import json
-import time
+import shutil
+import httpx
+import tempfile
+from fastapi import FastAPI, File, UploadFile, Request
+from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
 
 app = FastAPI()
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
-templates = Jinja2Templates(directory="templates")
+APOLLO_API_KEY = os.getenv("APOLLO_API_KEY")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-APOLLO_API_KEY = "xIx_O2UpDUlm8QxWMlWCMA"
+HTML_FORM = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>AI Contact Enricher</title>
+    <link href="/static/style.css" rel="stylesheet" />
+</head>
+<body>
+    <div class="container">
+        <h1>🧠 AI Contact Enricher</h1>
+        <form action="/" method="post" enctype="multipart/form-data">
+            <input type="file" name="file" accept=".csv" required>
+            <button type="submit">Enrich Contacts</button>
+        </form>
+    </div>
+</body>
+</html>
+"""
 
 @app.get("/", response_class=HTMLResponse)
-async def form_get(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+async def form():
+    return HTML_FORM
 
-def apollo_lookup(first_name, last_name):
-    url = "https://api.apollo.io/v1/mixed_people/search"
-    headers = {
-        "Cache-Control": "no-cache",
-        "Content-Type": "application/json",
-        "X-Api-Key": APOLLO_API_KEY
-    }
+@app.post("/")
+async def enrich_contacts(file: UploadFile = File(...)):
+    temp_dir = tempfile.mkdtemp()
+    input_path = os.path.join(temp_dir, file.filename)
 
-    payload = {
-        "q_organization_domains": [],
-        "page": 1,
-        "person_titles": ["Realtor"],
-        "display_mode": "enriched",
-        "person_first_name": first_name.strip(),
-        "person_last_name": last_name.strip()
-    }
+    with open(input_path, "wb") as f:
+        f.write(await file.read())
 
-    try:
-        response = requests.post(url, headers=headers, data=json.dumps(payload), timeout=10)
-        if response.status_code == 200:
-            results = response.json().get("people", [])
-            if results:
-                person = results[0]
-                email = person.get("email", "")
-                phone = person.get("phone_number", "")
-                print(f"✅ Found: {first_name} {last_name} | 📞 {phone} | 📧 {email}")
-                return phone or "", email or ""
-            else:
-                print(f"⚠️ No match found for {first_name} {last_name}")
-        else:
-            print(f"❌ Apollo error for {first_name} {last_name}: {response.status_code} {response.text}")
-    except Exception as e:
-        print(f"❌ Exception for {first_name} {last_name}: {e}")
-    return "", ""
+    output_filename = f"enriched_{uuid.uuid4().hex}.csv"
+    output_path = os.path.join(temp_dir, output_filename)
 
-@app.post("/", response_class=HTMLResponse)
-async def handle_upload(request: Request, file: UploadFile = File(...)):
-    temp_file = f"/tmp/temp_{uuid.uuid4().hex}.csv"
-    with open(temp_file, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+    with open(input_path, newline='') as infile, open(output_path, mode='w', newline='') as outfile:
+        reader = csv.DictReader(infile)
+        fieldnames = reader.fieldnames + ["Agent Phone", "Agent Email"]
+        writer = csv.DictWriter(outfile, fieldnames=fieldnames)
+        writer.writeheader()
 
-    df = pd.read_csv(temp_file)
+        for row in reader:
+            first = row.get("First Name", "").strip()
+            last = row.get("Last Name", "").strip()
+            full_name = f"{first} {last}".strip()
 
-    df["Enriched Agent Phone"] = ""
-    df["Enriched Agent Email"] = ""
+            if not full_name:
+                print("⚠️ Skipping empty name")
+                writer.writerow(row)
+                continue
 
-    for i, row in df.iterrows():
-        first_name = str(row.get("First Name", "")).strip()
-        last_name = str(row.get("Last Name", "")).strip()
-        print(f"🔍 Searching for {first_name} {last_name} in ...")
-        phone, email = apollo_lookup(first_name, last_name)
-        df.at[i, "Enriched Agent Phone"] = phone
-        df.at[i, "Enriched Agent Email"] = email
-        time.sleep(1.5)  # stay under rate limit
+            print(f"🔍 Searching for {full_name} in Apollo...")
 
-    enriched_file = f"/tmp/enriched_{uuid.uuid4().hex}.csv"
-    df.to_csv(enriched_file, index=False)
-    print(f"✅ File saved: {enriched_file}")
+            query = {
+                "api_key": APOLLO_API_KEY,
+                "q_person_name": full_name,
+                "person_titles": ["Realtor"]
+            }
 
-    os.remove(temp_file)
+            try:
+                response = httpx.post(
+                    "https://api.apollo.io/v1/mixed_people/search",
+                    json=query,
+                    timeout=30
+                )
+                response.raise_for_status()
+                data = response.json()
 
-    return HTMLResponse(
-        content=f"""
-        <html><body style='text-align:center; font-family:sans-serif;'>
-            <h2>✅ Enrichment Complete</h2>
-            <a href='/download/{os.path.basename(enriched_file)}' download>Download Enriched CSV</a>
-        </body></html>
-        """,
-        status_code=200
-    )
+                matches = data.get("people", [])
+                if matches:
+                    person = matches[0]
+                    phone = person.get("phone_numbers", [None])[0]
+                    email = person.get("email")
+                    print(f"✅ Found: {full_name} | 📞 {phone} | 📧 {email}")
+                    row["Agent Phone"] = phone or ""
+                    row["Agent Email"] = email or ""
+                else:
+                    print(f"⚠️ No match found for {full_name}")
+                    row["Agent Phone"] = ""
+                    row["Agent Email"] = ""
+            except Exception as e:
+                print(f"❌ Apollo error for {full_name}: {e}")
+                row["Agent Phone"] = ""
+                row["Agent Email"] = ""
 
-@app.get("/download/{filename}")
-async def download_file(filename: str):
-    filepath = f"/tmp/{filename}"
-    if not os.path.exists(filepath):
-        return JSONResponse(status_code=404, content={"error": "File not found"})
-    print(f"⬇️ Serving file: {filepath}")
-    response = FileResponse(path=filepath, filename=filename, media_type="text/csv")
-    @response.call_on_close
-    def cleanup():
-        try:
-            os.remove(filepath)
-            print(f"🧹 Deleted file after download: {filepath}")
-        except Exception as e:
-            print(f"⚠️ Failed to delete file: {e}")
-    return response
+            writer.writerow(row)
+
+    return FileResponse(output_path, filename=output_filename, media_type='text/csv', background=lambda: shutil.rmtree(temp_dir))
