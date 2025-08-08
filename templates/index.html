@@ -1,63 +1,54 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>AI Contact Enricher</title>
   <style>
     body {
       font-family: Arial, sans-serif;
-      background: #f9fafb;
-      margin: 0;
+      background: #f9f9f9;
       padding: 40px;
+      text-align: center;
     }
+
     .container {
-      max-width: 600px;
-      margin: auto;
       background: white;
       padding: 30px;
-      border-radius: 12px;
-      box-shadow: 0 4px 20px rgba(0,0,0,0.05);
+      border-radius: 8px;
+      display: inline-block;
+      box-shadow: 0 0 15px rgba(0,0,0,0.1);
     }
-    h1 {
-      text-align: center;
-      color: #111827;
-    }
-    p {
-      text-align: center;
-      color: #6b7280;
-    }
+
     input[type="file"] {
-      display: block;
-      margin: 20px auto;
+      margin: 20px 0;
     }
+
     button {
-      background: #2563eb;
+      padding: 10px 20px;
+      background-color: #3478f6;
       color: white;
       border: none;
-      padding: 12px 24px;
+      border-radius: 4px;
       font-size: 16px;
-      border-radius: 8px;
       cursor: pointer;
-      display: block;
-      margin: 20px auto;
     }
-    .status {
-      text-align: center;
-      margin-top: 20px;
-      color: #10b981;
-      font-weight: bold;
+
+    button:hover {
+      background-color: #265fcc;
     }
   </style>
 </head>
 <body>
   <div class="container">
     <h1>AI Contact Enricher</h1>
-    <p>Upload your Realtor CSV file. We'll enrich it with phone numbers and emails.</p>
-    <form method="POST" enctype="multipart/form-data">
+    <p>Select your CSV file and click upload to enrich agent contact data.</p>
+
+    <form action="/upload/" method="post" enctype="multipart/form-data">
       <input type="file" name="file" accept=".csv" required />
-      <button type="submit">Enrich Contacts</button>
+      <br />
+      <button type="submit">Upload & Enrich</button>
     </form>
-    <div class="status">Waiting for file...</div>
   </div>
 </body>
 </html>
