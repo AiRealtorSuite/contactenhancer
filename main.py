@@ -58,10 +58,13 @@ async def enrich_contacts(file: UploadFile = File(...)):
                         "X-Api-Key": APOLLO_API_KEY
                     },
                     json={
-                        "first_name": first_name,
-                        "last_name": last_name,
+                        "page": 1,
                         "person_titles": ["Realtor"],
-                        "page": 1
+                        "filters": {
+                            "first_name": first_name,
+                            "last_name": last_name,
+                            "title_current": ["Realtor"]
+                        }
                     }
                 )
                 response.raise_for_status()
@@ -79,8 +82,12 @@ async def enrich_contacts(file: UploadFile = File(...)):
                     row["Agent Phone"] = ""
                     row["Agent Email"] = ""
 
-            except requests.exceptions.RequestException as e:
-                print(f"❌ Apollo error for {first_name} {last_name}: {e}")
+            except requests.exceptions.HTTPError as e:
+                print(f"❌ Apollo HTTP error for {first_name} {last_name}: {e.response.text}")
+                row["Agent Phone"] = ""
+                row["Agent Email"] = ""
+            except Exception as e:
+                print(f"❌ General error for {first_name} {last_name}: {e}")
                 row["Agent Phone"] = ""
                 row["Agent Email"] = ""
 
