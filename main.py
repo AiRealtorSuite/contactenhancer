@@ -20,11 +20,8 @@ app.add_middleware(
 
 @app.get("/")
 async def main():
-    try:
-        with open(os.path.join(os.path.dirname(__file__), "templates", "index.html")) as f:
-            return HTMLResponse(f.read())
-    except FileNotFoundError:
-        return HTMLResponse("<h1>Internal Server Error: index.html not found</h1>", status_code=500)
+    with open("templates/index.html") as f:
+        return HTMLResponse(f.read())
 
 @app.post("/")
 async def enrich_contacts(file: UploadFile = File(...)):
@@ -50,8 +47,7 @@ async def enrich_contacts(file: UploadFile = File(...)):
                 enriched_rows.append(row)
                 continue
 
-            full_name = f"{first_name} {last_name}"
-            print(f"🔍 Searching for {full_name} in Apollo...")
+            print(f"🔍 Searching for {first_name} {last_name} in Apollo...")
 
             try:
                 response = requests.post(
@@ -62,7 +58,8 @@ async def enrich_contacts(file: UploadFile = File(...)):
                         "X-Api-Key": APOLLO_API_KEY
                     },
                     json={
-                        "q_person_name": full_name,
+                        "first_name": first_name,
+                        "last_name": last_name,
                         "person_titles": ["Realtor"],
                         "page": 1
                     }
@@ -74,16 +71,16 @@ async def enrich_contacts(file: UploadFile = File(...)):
                     person = data["people"][0]
                     phone = person.get("phone_number") or "None"
                     email = person.get("email") or "None"
-                    print(f"✅ Found: {full_name} | 📞 {phone} | 📧 {email}")
+                    print(f"✅ Found: {first_name} {last_name} | 📞 {phone} | 📧 {email}")
                     row["Agent Phone"] = phone
                     row["Agent Email"] = email
                 else:
-                    print(f"⚠️ No match found for {full_name}")
+                    print(f"⚠️ No match found for {first_name} {last_name}")
                     row["Agent Phone"] = ""
                     row["Agent Email"] = ""
 
             except requests.exceptions.RequestException as e:
-                print(f"❌ Apollo error for {full_name}: {e}")
+                print(f"❌ Apollo error for {first_name} {last_name}: {e}")
                 row["Agent Phone"] = ""
                 row["Agent Email"] = ""
 
