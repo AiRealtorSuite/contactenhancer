@@ -1,97 +1,71 @@
 import os
 import csv
-import tempfile
 import requests
-from fastapi import FastAPI, File, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse
-from starlette.middleware.cors import CORSMiddleware
-
-APOLLO_API_KEY = os.getenv("APOLLO_API_KEY") or "xIx_O2UpDUlm8QxWMlWCMA"  # fallback to hardcoded key
+import pandas as pd
+from fastapi import FastAPI, UploadFile, Form
+from fastapi.responses import FileResponse
+from tempfile import TemporaryDirectory
 
 app = FastAPI()
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
-@app.get("/")
-async def main():
-    with open("templates/index.html") as f:
-        return HTMLResponse(f.read())
+APOLLO_API_KEY = "tSJVEfGeRu_7Wyjgl2Laxg"
+APOLLO_URL = "https://api.apollo.io/v1/mixed_people/search"
+
+def search_apollo_contact(full_name):
+    headers = {
+        "Cache-Control": "no-cache",
+        "Content-Type": "application/json",
+        "Accept": "application/json"
+    }
+
+    payload = {
+        "api_key": APOLLO_API_KEY,
+        "q_organization_domains": [],
+        "person_name": full_name,
+        "page": 1
+    }
+
+    try:
+        response = requests.post(APOLLO_URL, json=payload, headers=headers)
+        response.raise_for_status()
+        results = response.json()
+
+        if results.get("people"):
+            person = results["people"][0]
+            return {
+                "email": person.get("email", ""),
+                "phone": person.get("phone", "")
+            }
+        else:
+            return {"email": "", "phone": ""}
+    except Exception as e:
+        print(f"❌ Apollo API error for {full_name}: {e}")
+        return {"email": "", "phone": ""}
 
 @app.post("/")
-async def enrich_contacts(file: UploadFile = File(...)):
-    temp_dir = tempfile.mkdtemp()
-    input_path = os.path.join(temp_dir, file.filename)
-    output_path = os.path.join(temp_dir, f"enriched_{file.filename}")
+async def enrich_contacts(file: UploadFile, tag: str = Form(...)):
+    with TemporaryDirectory() as tmpdir:
+        input_path = os.path.join(tmpdir, file.filename)
+        output_path = os.path.join(tmpdir, f"enriched_{file.filename}")
 
-    with open(input_path, "wb") as f:
-        f.write(await file.read())
+        # Save uploaded CSV
+        with open(input_path, "wb") as f:
+            f.write(await file.read())
 
-    enriched_rows = []
-    with open(input_path, newline="", encoding="utf-8-sig") as csvfile:
-        reader = csv.DictReader(csvfile)
-        fieldnames = reader.fieldnames + ["Agent Phone", "Agent Email"]
+        df = pd.read_csv(input_path)
 
-        for row in reader:
-            first_name = row.get("First Name", "").strip()
-            last_name = row.get("Last Name", "").strip()
+        # Add columns for enrichment
+        df["Email"] = ""
+        df["Phone"] = ""
 
-            if not first_name or not last_name:
-                print(f"⚠️ Missing name, skipping row: {row}")
-                row["Agent Phone"] = ""
-                row["Agent Email"] = ""
-                enriched_rows.append(row)
-                continue
+        for index, row in df.iterrows():
+            full_name = f"{row['First Name']} {row['Last Name']}"
+            print(f"🔍 Searching Apollo for: {full_name}")
+            result = search_apollo_contact(full_name)
+            df.at[index, "Email"] = result["email"]
+            df.at[index, "Phone"] = result["phone"]
 
-            print(f"🔍 Searching Apollo for: {first_name} {last_name}")
+        df.to_csv(output_path, index=False)
+        print(f"✅ Enriched file saved: {output_path}")
+        return FileResponse(output_path, filename=os.path.basename(output_path))
 
-            try:
-                response = requests.post(
-                    "https://api.apollo.io/v1/mixed_people/search",
-                    headers={
-                        "Authorization": f"Bearer {APOLLO_API_KEY}",
-                        "Content-Type": "application/json"
-                    },
-                    json={
-                        "page": 1,
-                        "person_titles": ["Realtor"],
-                        "filters": {
-                            "first_name": first_name,
-                            "last_name": last_name,
-                            "title_current": ["Realtor"]
-                        }
-                    }
-                )
-                response.raise_for_status()
-                data = response.json()
-
-                if data.get("people"):
-                    person = data["people"][0]
-                    phone = person.get("phone_number") or ""
-                    email = person.get("email") or ""
-                    print(f"✅ Found: 📞 {phone} | 📧 {email}")
-                    row["Agent Phone"] = phone
-                    row["Agent Email"] = email
-                else:
-                    print(f"⚠️ No match for: {first_name} {last_name}")
-                    row["Agent Phone"] = ""
-                    row["Agent Email"] = ""
-
-            except requests.exceptions.RequestException as e:
-                print(f"❌ Apollo API error for {first_name} {last_name}: {e}")
-                row["Agent Phone"] = ""
-                row["Agent Email"] = ""
-
-            enriched_rows.append(row)
-
-    with open(output_path, "w", newline="", encoding="utf-8") as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(enriched_rows)
-
-    print(f"✅ Enriched file saved: {output_path}")
-    return FileResponse(output_path, filename=os.path.basename(output_path))
