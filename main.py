@@ -32,17 +32,17 @@ log = logging.getLogger("contact_enricher")
 def home():
     return {"message": "AI Contact Enricher API is running"}
 
+# --- accept both /upload_csv and /upload/ ---
 @app.post("/upload_csv")
+@app.post("/upload/")
 async def upload_csv(file: UploadFile = File(...)):
     try:
         raw = await file.read()
-        # Try UTF-8 then Latin-1 for weird CSVs
         try:
             df = pd.read_csv(io.BytesIO(raw))
         except UnicodeDecodeError:
             df = pd.read_csv(io.BytesIO(raw), encoding="latin-1")
 
-        # Validate columns
         missing = [c for c in [MLS_COL, FIRST_COL, LAST_COL] if c not in df.columns]
         if missing:
             return JSONResponse(
@@ -67,7 +67,7 @@ async def upload_csv(file: UploadFile = File(...)):
                         result["Source"] = "MLS"
                         result["LookupStatus"] = "ok"
 
-                # 2) Fallback to Apollo by full name (if not found yet)
+                # 2) Fallback to Apollo by full name (POST JSON, no query params)
                 if not result.get("Email") and full_name:
                     apollo_data = fetch_from_apollo_by_name(full_name)
                     if apollo_data:
@@ -75,12 +75,11 @@ async def upload_csv(file: UploadFile = File(...)):
                         result["Source"] = "Apollo"
                         result["LookupStatus"] = "ok"
 
-                # If still empty, mark no_data
                 if not result.get("Email") and not result.get("Phone"):
                     result["LookupStatus"] = "no_data"
 
             except Exception as e:
-                log.exception(f"Row {idx} error")
+                log.exception(f"Row {idx} processing error")
                 result["LookupStatus"] = f"error: {e}"
 
             merged = row.to_dict()
@@ -97,10 +96,7 @@ async def upload_csv(file: UploadFile = File(...)):
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 def fetch_from_mls_api(mls_id: str):
-    """
-    RapidAPI: US Real Estate Listings (Agent lookup by MLS ID).
-    Returns dict like {"Email": "...", "Phone": "..."} or None.
-    """
+    """RapidAPI agent lookup by MLS ID -> {'Email', 'Phone'} or None."""
     if not RAPIDAPI_KEY:
         return None
     try:
@@ -110,7 +106,7 @@ def fetch_from_mls_api(mls_id: str):
             "x-rapidapi-host": "us-real-estate-listings.p.rapidapi.com"
         }
         params = {"mls_id": mls_id}
-        r = requests.get(url, headers=headers, params=params, timeout=15)
+        r = requests.get(url, headers=headers, params=params, timeout=20)
         if r.status_code == 200:
             data = r.json() or {}
             email = data.get("email") or data.get("agent_email")
@@ -125,7 +121,9 @@ def fetch_from_mls_api(mls_id: str):
 
 def fetch_from_apollo_by_name(full_name: str):
     """
-    Apollo fallback by person name. Returns {"Email": "...", "Phone": "..."} or None.
+    Apollo fallback by person name.
+    Must be POST with JSON body (query params cause 422).
+    Returns {'Email','Phone'} or None.
     """
     if not APOLLO_API_KEY or not full_name:
         return None
@@ -135,9 +133,12 @@ def fetch_from_apollo_by_name(full_name: str):
             "api_key": APOLLO_API_KEY,
             "person_name": full_name,
             "page": 1,
-            "per_page": 1
+            "per_page": 1,
+            # If you want to restrict by org domain, uncomment below.
+            # The param MUST be in JSON, not the URL querystring.
+            # "q_organization_domains": ["realtor.com"],
         }
-        r = requests.post(url, json=payload, timeout=20)
+        r = requests.post(url, json=payload, timeout=30)
         if r.status_code == 200:
             data = r.json() or {}
             people = data.get("people") or []
@@ -148,7 +149,8 @@ def fetch_from_apollo_by_name(full_name: str):
                 if email or phone:
                     return {"Email": email, "Phone": phone}
         else:
-            log.warning(f"Apollo {r.status_code} for {full_name}: {r.text[:200]}")
+            log.warning(f"Apollo {r.status_code} for {full_name}: {r.text[:300]}")
     except Exception as e:
         log.warning(f"Apollo error for {full_name}: {e}")
     return None
+
