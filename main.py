@@ -53,9 +53,8 @@ async def enrich_contacts(file: UploadFile = File(...)):
                 response = requests.post(
                     "https://api.apollo.io/v1/mixed_people/search",
                     headers={
-                        "Cache-Control": "no-cache",
-                        "Content-Type": "application/json",
-                        "X-Api-Key": APOLLO_API_KEY
+                        "Authorization": f"Bearer {APOLLO_API_KEY}",
+                        "Content-Type": "application/json"
                     },
                     json={
                         "page": 1,
