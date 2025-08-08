@@ -1,71 +1,65 @@
+from fastapi import FastAPI, UploadFile, Request, Form
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
 import os
-import csv
-import requests
 import pandas as pd
-from fastapi import FastAPI, UploadFile, Form
-from fastapi.responses import FileResponse
-from tempfile import TemporaryDirectory
+import requests
+from io import StringIO
+import tempfile
 
 app = FastAPI()
 
-APOLLO_API_KEY = "tSJVEfGeRu_7Wyjgl2Laxg"
-APOLLO_URL = "https://api.apollo.io/v1/mixed_people/search"
+templates = Jinja2Templates(directory="templates")
 
-def search_apollo_contact(full_name):
+# Serve index.html from templates folder
+@app.get("/", response_class=HTMLResponse)
+async def read_index(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
+
+# Apollo API Key from environment variable
+APOLLO_API_KEY = os.getenv("APOLLO_API_KEY")
+
+# Apollo enrichment function
+def search_apollo(full_name):
+    url = "https://api.apollo.io/v1/mixed_people/search"
     headers = {
-        "Cache-Control": "no-cache",
         "Content-Type": "application/json",
-        "Accept": "application/json"
     }
-
     payload = {
         "api_key": APOLLO_API_KEY,
-        "q_organization_domains": [],
         "person_name": full_name,
         "page": 1
     }
-
     try:
-        response = requests.post(APOLLO_URL, json=payload, headers=headers)
+        response = requests.post(url, headers=headers, json=payload)
         response.raise_for_status()
-        results = response.json()
-
-        if results.get("people"):
-            person = results["people"][0]
-            return {
-                "email": person.get("email", ""),
-                "phone": person.get("phone", "")
-            }
-        else:
-            return {"email": "", "phone": ""}
+        data = response.json()
+        if data.get("people"):
+            person = data["people"][0]
+            return person.get("email"), person.get("phone_number")
     except Exception as e:
         print(f"❌ Apollo API error for {full_name}: {e}")
-        return {"email": "", "phone": ""}
+    return None, None
 
+# File upload and enrichment endpoint
 @app.post("/")
-async def enrich_contacts(file: UploadFile, tag: str = Form(...)):
-    with TemporaryDirectory() as tmpdir:
-        input_path = os.path.join(tmpdir, file.filename)
-        output_path = os.path.join(tmpdir, f"enriched_{file.filename}")
+async def enrich_file(file: UploadFile):
+    contents = await file.read()
+    df = pd.read_csv(StringIO(contents.decode("utf-8")))
 
-        # Save uploaded CSV
-        with open(input_path, "wb") as f:
-            f.write(await file.read())
+    enriched_data = []
+    for _, row in df.iterrows():
+        name = f"{row.get('first_name', '')} {row.get('last_name', '')}".strip()
+        print(f"🔍 Searching Apollo for: {name}")
+        email, phone = search_apollo(name)
+        enriched_row = row.to_dict()
+        enriched_row["Email"] = email or ""
+        enriched_row["Phone"] = phone or ""
+        enriched_data.append(enriched_row)
 
-        df = pd.read_csv(input_path)
-
-        # Add columns for enrichment
-        df["Email"] = ""
-        df["Phone"] = ""
-
-        for index, row in df.iterrows():
-            full_name = f"{row['First Name']} {row['Last Name']}"
-            print(f"🔍 Searching Apollo for: {full_name}")
-            result = search_apollo_contact(full_name)
-            df.at[index, "Email"] = result["email"]
-            df.at[index, "Phone"] = result["phone"]
-
-        df.to_csv(output_path, index=False)
-        print(f"✅ Enriched file saved: {output_path}")
-        return FileResponse(output_path, filename=os.path.basename(output_path))
-
+    enriched_df = pd.DataFrame(enriched_data)
+    output_dir = tempfile.mkdtemp(prefix="enriched_")
+    output_path = os.path.join(output_dir, file.filename)
+    enriched_df.to_csv(output_path, index=False)
+    print(f"✅ Enriched file saved: {output_path}")
+    return {"status": "success", "file_path": output_path}
