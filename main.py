@@ -1,26 +1,32 @@
 import os
-import csv
 import io
+import logging
 import requests
 import pandas as pd
 from fastapi import FastAPI, UploadFile, File
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from tempfile import NamedTemporaryFile
 
-# API Keys
-RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY")
-APOLLO_API_KEY = os.getenv("APOLLO_API_KEY")
+# ===== Config / Keys =====
+RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY", "")
+APOLLO_API_KEY = os.getenv("APOLLO_API_KEY", "")
 
-app = FastAPI()
+MLS_COL = "MLS Number"
+FIRST_COL = "First Name"
+LAST_COL  = "Last Name"
 
-# Allow all origins (adjust if needed)
+# ===== App =====
+app = FastAPI(title="AI Contact Enricher")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger("contact_enricher")
 
 @app.get("/")
 def home():
@@ -29,39 +35,74 @@ def home():
 @app.post("/upload_csv")
 async def upload_csv(file: UploadFile = File(...)):
     try:
-        contents = await file.read()
-        df = pd.read_csv(io.BytesIO(contents))
+        raw = await file.read()
+        # Try UTF-8 then Latin-1 for weird CSVs
+        try:
+            df = pd.read_csv(io.BytesIO(raw))
+        except UnicodeDecodeError:
+            df = pd.read_csv(io.BytesIO(raw), encoding="latin-1")
 
-        if "MLS_ID" not in df.columns:
-            return {"error": "CSV must contain 'MLS_ID' column"}
+        # Validate columns
+        missing = [c for c in [MLS_COL, FIRST_COL, LAST_COL] if c not in df.columns]
+        if missing:
+            return JSONResponse(
+                status_code=422,
+                content={"error": f"CSV missing required columns: {', '.join(missing)}"}
+            )
 
-        enriched_data = []
+        enriched_rows = []
+        for idx, row in df.iterrows():
+            result = {"Email": None, "Phone": None, "Source": None, "LookupStatus": "unattempted"}
+            try:
+                mls_id = str(row[MLS_COL]).strip() if pd.notna(row[MLS_COL]) else ""
+                first  = str(row[FIRST_COL]).strip() if pd.notna(row[FIRST_COL]) else ""
+                last   = str(row[LAST_COL]).strip() if pd.notna(row[LAST_COL]) else ""
+                full_name = (first + " " + last).strip()
 
-        for _, row in df.iterrows():
-            mls_id = str(row["MLS_ID"]).strip()
-            contact_info = await get_contact_info(mls_id)
-            enriched_row = row.to_dict()
-            enriched_row.update(contact_info)
-            enriched_data.append(enriched_row)
+                # 1) Try MLS by MLS Number
+                if mls_id:
+                    mls_data = fetch_from_mls_api(mls_id)
+                    if mls_data:
+                        result.update(mls_data)
+                        result["Source"] = "MLS"
+                        result["LookupStatus"] = "ok"
 
-        enriched_df = pd.DataFrame(enriched_data)
-        output_file = NamedTemporaryFile(delete=False, suffix=".csv")
-        enriched_df.to_csv(output_file.name, index=False)
+                # 2) Fallback to Apollo by full name (if not found yet)
+                if not result.get("Email") and full_name:
+                    apollo_data = fetch_from_apollo_by_name(full_name)
+                    if apollo_data:
+                        result.update(apollo_data)
+                        result["Source"] = "Apollo"
+                        result["LookupStatus"] = "ok"
 
-        return FileResponse(output_file.name, filename="enriched_contacts.csv", media_type="text/csv")
+                # If still empty, mark no_data
+                if not result.get("Email") and not result.get("Phone"):
+                    result["LookupStatus"] = "no_data"
+
+            except Exception as e:
+                log.exception(f"Row {idx} error")
+                result["LookupStatus"] = f"error: {e}"
+
+            merged = row.to_dict()
+            merged.update(result)
+            enriched_rows.append(merged)
+
+        out_df = pd.DataFrame(enriched_rows)
+        tmp = NamedTemporaryFile(delete=False, suffix=".csv")
+        out_df.to_csv(tmp.name, index=False)
+        return FileResponse(tmp.name, filename="enriched_contacts.csv", media_type="text/csv")
 
     except Exception as e:
-        return {"error": str(e)}
+        log.exception("Upload handler failed")
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
-async def get_contact_info(mls_id):
-    """Try MLS API first, then Apollo as fallback."""
-    mls_data = fetch_from_mls_api(mls_id)
-    if mls_data:
-        return mls_data
-    apollo_data = fetch_from_apollo(mls_id)
-    return apollo_data or {}
-
-def fetch_from_mls_api(mls_id):
+def fetch_from_mls_api(mls_id: str):
+    """
+    RapidAPI: US Real Estate Listings (Agent lookup by MLS ID).
+    Returns dict like {"Email": "...", "Phone": "..."} or None.
+    """
+    if not RAPIDAPI_KEY:
+        return None
     try:
         url = "https://us-real-estate-listings.p.rapidapi.com/agent"
         headers = {
@@ -69,34 +110,45 @@ def fetch_from_mls_api(mls_id):
             "x-rapidapi-host": "us-real-estate-listings.p.rapidapi.com"
         }
         params = {"mls_id": mls_id}
-        response = requests.get(url, headers=headers, params=params, timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            if data and "email" in data and "phone" in data:
-                return {"Email": data.get("email"), "Phone": data.get("phone")}
+        r = requests.get(url, headers=headers, params=params, timeout=15)
+        if r.status_code == 200:
+            data = r.json() or {}
+            email = data.get("email") or data.get("agent_email")
+            phone = data.get("phone") or data.get("agent_phone")
+            if email or phone:
+                return {"Email": email, "Phone": phone}
+        else:
+            log.warning(f"MLS API {r.status_code} for {mls_id}: {r.text[:200]}")
     except Exception as e:
-        print(f"MLS API error for {mls_id}: {e}")
+        log.warning(f"MLS API error for {mls_id}: {e}")
     return None
 
-def fetch_from_apollo(name_or_email):
+def fetch_from_apollo_by_name(full_name: str):
+    """
+    Apollo fallback by person name. Returns {"Email": "...", "Phone": "..."} or None.
+    """
+    if not APOLLO_API_KEY or not full_name:
+        return None
     try:
         url = "https://api.apollo.io/v1/mixed_people/search"
-        headers = {"Cache-Control": "no-cache"}
         payload = {
             "api_key": APOLLO_API_KEY,
-            "q_keywords": name_or_email,
+            "person_name": full_name,
             "page": 1,
             "per_page": 1
         }
-        response = requests.post(url, json=payload, headers=headers, timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            if "people" in data and data["people"]:
-                person = data["people"][0]
-                return {
-                    "Email": person.get("email"),
-                    "Phone": person.get("phone_numbers", [{}])[0].get("number")
-                }
+        r = requests.post(url, json=payload, timeout=20)
+        if r.status_code == 200:
+            data = r.json() or {}
+            people = data.get("people") or []
+            if people:
+                p = people[0]
+                email = p.get("email")
+                phone = (p.get("phone_numbers") or [{}])[0].get("number")
+                if email or phone:
+                    return {"Email": email, "Phone": phone}
+        else:
+            log.warning(f"Apollo {r.status_code} for {full_name}: {r.text[:200]}")
     except Exception as e:
-        print(f"Apollo API error for {name_or_email}: {e}")
+        log.warning(f"Apollo error for {full_name}: {e}")
     return None
