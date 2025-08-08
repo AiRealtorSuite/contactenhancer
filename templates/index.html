@@ -1,54 +1,10 @@
 <!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>AI Contact Enricher</title>
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      background: #f9f9f9;
-      padding: 40px;
-      text-align: center;
-    }
-
-    .container {
-      background: white;
-      padding: 30px;
-      border-radius: 8px;
-      display: inline-block;
-      box-shadow: 0 0 15px rgba(0,0,0,0.1);
-    }
-
-    input[type="file"] {
-      margin: 20px 0;
-    }
-
-    button {
-      padding: 10px 20px;
-      background-color: #3478f6;
-      color: white;
-      border: none;
-      border-radius: 4px;
-      font-size: 16px;
-      cursor: pointer;
-    }
-
-    button:hover {
-      background-color: #265fcc;
-    }
-  </style>
-</head>
+<html>
 <body>
-  <div class="container">
-    <h1>AI Contact Enricher</h1>
-    <p>Select your CSV file and click upload to enrich agent contact data.</p>
-
-    <form action="/upload/" method="post" enctype="multipart/form-data">
-      <input type="file" name="file" accept=".csv" required />
-      <br />
-      <button type="submit">Upload & Enrich</button>
-    </form>
-  </div>
+  <h2>Test AI Contact Enricher Upload</h2>
+  <form action="/upload_csv" method="post" enctype="multipart/form-data">
+    <input type="file" name="file">
+    <input type="submit" value="Upload CSV">
+  </form>
 </body>
 </html>
