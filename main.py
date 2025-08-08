@@ -40,65 +40,71 @@ async def enrich_contacts(file: UploadFile = File(...)):
         for row in reader:
             mls_number = row.get("MLS Number", "").strip()
             nrds_id = row.get("Agent ID", "").strip()
+            address = row.get("Address (full)", "").strip()
 
-            if not mls_number or not nrds_id:
-                print(f"⚠️ Missing MLS Number or NRDS ID, skipping row: {row}")
+            if not mls_number or not nrds_id or not address:
+                print(f"⚠️ Missing required field(s), skipping row: {row}")
                 row["Agent Name"] = ""
                 row["Agent Phone"] = ""
                 row["Agent Email"] = ""
                 enriched_rows.append(row)
                 continue
 
-            print(f"🔍 Searching listing: MLS {mls_number} | NRDS {nrds_id}")
-            time.sleep(0.1)  # Safe throttle for Pro plan
+            print(f"🔍 Searching by address: {address} | MLS: {mls_number} | NRDS: {nrds_id}")
+            time.sleep(0.1)
 
-            # Step 1: Search for listing using MLS number
             advertiser_id = ""
+
             try:
+                # Step 1: Search by full address
                 search_resp = requests.get(
                     "https://us-real-estate-listings.p.rapidapi.com/properties/search",
                     headers={
                         "X-RapidAPI-Key": RAPIDAPI_KEY,
                         "X-RapidAPI-Host": "us-real-estate-listings.p.rapidapi.com"
                     },
-                    params={"query": mls_number}
+                    params={"query": address}
                 )
                 search_resp.raise_for_status()
-                listings = search_resp.json().get("data", {}).get("home_search", {}).get("results", [])
-                if listings:
-                    advertisers = listings[0].get("advertisers", [])
-                    if advertisers:
-                        advertiser_id = advertisers[0].get("advertiser_id", "")
-            except Exception as e:
-                print(f"❌ Error during listing search: {e}")
+                results = search_resp.json().get("data", {}).get("home_search", {}).get("results", [])
 
-            # Step 2: Query agent profile with advertiser_id and NRDS ID
-            if advertiser_id and nrds_id:
-                try:
-                    profile_resp = requests.get(
-                        "https://us-real-estate-listings.p.rapidapi.com/agent/profile",
-                        headers={
-                            "X-RapidAPI-Key": RAPIDAPI_KEY,
-                            "X-RapidAPI-Host": "us-real-estate-listings.p.rapidapi.com"
-                        },
-                        params={
-                            "advertiser_id": advertiser_id,
-                            "nrds_id": nrds_id
-                        }
-                    )
-                    profile_resp.raise_for_status()
-                    profile = profile_resp.json().get("data", {})
-                    row["Agent Name"] = profile.get("name", "")
-                    row["Agent Phone"] = profile.get("phone", "")
-                    row["Agent Email"] = profile.get("email", "")
-                    print(f"✅ Found: {row['Agent Name']} | 📞 {row['Agent Phone']} | 📧 {row['Agent Email']}")
-                except Exception as e:
-                    print(f"❌ Error retrieving agent profile: {e}")
+                for result in results:
+                    if result.get("mls_id", "").strip().upper() == mls_number.upper():
+                        advertisers = result.get("advertisers", [])
+                        if advertisers:
+                            advertiser_id = advertisers[0].get("advertiser_id", "")
+                        break
+
+                if not advertiser_id:
+                    print(f"❌ No matching advertiser found for MLS {mls_number}")
                     row["Agent Name"] = ""
                     row["Agent Phone"] = ""
                     row["Agent Email"] = ""
-            else:
-                print(f"❌ No advertiser_id found for MLS {mls_number}")
+                    enriched_rows.append(row)
+                    continue
+
+                # Step 2: Enrich agent using advertiser_id and NRDS ID
+                profile_resp = requests.get(
+                    "https://us-real-estate-listings.p.rapidapi.com/agent/profile",
+                    headers={
+                        "X-RapidAPI-Key": RAPIDAPI_KEY,
+                        "X-RapidAPI-Host": "us-real-estate-listings.p.rapidapi.com"
+                    },
+                    params={
+                        "advertiser_id": advertiser_id,
+                        "nrds_id": nrds_id
+                    }
+                )
+                profile_resp.raise_for_status()
+                profile = profile_resp.json().get("data", {})
+
+                row["Agent Name"] = profile.get("name", "")
+                row["Agent Phone"] = profile.get("phone", "")
+                row["Agent Email"] = profile.get("email", "")
+                print(f"✅ Found: {row['Agent Name']} | 📞 {row['Agent Phone']} | 📧 {row['Agent Email']}")
+
+            except Exception as e:
+                print(f"❌ Error during enrichment for MLS {mls_number}: {e}")
                 row["Agent Name"] = ""
                 row["Agent Phone"] = ""
                 row["Agent Email"] = ""
