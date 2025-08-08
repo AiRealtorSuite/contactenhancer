@@ -1,13 +1,12 @@
 import os
 import csv
-import shutil
 import tempfile
 import requests
-from fastapi import FastAPI, File, UploadFile, Form
+from fastapi import FastAPI, File, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 from starlette.middleware.cors import CORSMiddleware
 
-APOLLO_API_KEY = os.getenv("APOLLO_API_KEY")
+RAPIDAPI_KEY = "f1a850ecbemsh11bb6e2b91515c0p19d12ejsnf375208d92a7"
 
 app = FastAPI()
 app.add_middleware(
@@ -27,7 +26,7 @@ async def main():
 async def enrich_contacts(file: UploadFile = File(...)):
     temp_dir = tempfile.mkdtemp()
     input_path = os.path.join(temp_dir, file.filename)
-    output_path = os.path.join(temp_dir, f"enriched_{os.path.splitext(file.filename)[0]}.csv")
+    output_path = os.path.join(temp_dir, f"enriched_{file.filename}")
 
     with open(input_path, "wb") as f:
         f.write(await file.read())
@@ -35,58 +34,42 @@ async def enrich_contacts(file: UploadFile = File(...)):
     enriched_rows = []
     with open(input_path, newline="", encoding="utf-8-sig") as csvfile:
         reader = csv.DictReader(csvfile)
-        fieldnames = reader.fieldnames + ["Agent Phone", "Agent Email"]
-        for row in reader:
-            first_name = row.get("First Name", "").strip()
-            last_name = row.get("Last Name", "").strip()
+        fieldnames = reader.fieldnames + ["Agent Name", "Agent Phone", "Agent Email"]
 
-            if not first_name or not last_name:
-                print(f"⚠️ Missing name data, skipping row: {row}")
+        for row in reader:
+            mls_id = row.get("MLS Number", "").strip()
+
+            if not mls_id:
+                print(f"⚠️ Missing MLS Number, skipping row: {row}")
+                row["Agent Name"] = ""
                 row["Agent Phone"] = ""
                 row["Agent Email"] = ""
                 enriched_rows.append(row)
                 continue
 
-            print(f"🔍 Searching for {first_name} {last_name} in Apollo...")
-
+            print(f"🔍 Searching property ID: {mls_id}")
             try:
-                response = requests.post(
-                    "https://api.apollo.io/v1/mixed_people/search",
+                response = requests.get(
+                    "https://us-real-estate-listings.p.rapidapi.com/properties/detail",
                     headers={
-                        "Authorization": f"Bearer {APOLLO_API_KEY}",
-                        "Content-Type": "application/json"
+                        "X-RapidAPI-Key": RAPIDAPI_KEY,
+                        "X-RapidAPI-Host": "us-real-estate-listings.p.rapidapi.com"
                     },
-                    json={
-                        "page": 1,
-                        "person_titles": ["Realtor"],
-                        "filters": {
-                            "first_name": first_name,
-                            "last_name": last_name,
-                            "title_current": ["Realtor"]
-                        }
-                    }
+                    params={"property_id": mls_id}
                 )
                 response.raise_for_status()
                 data = response.json()
 
-                if data.get("people"):
-                    person = data["people"][0]
-                    phone = person.get("phone_number") or "None"
-                    email = person.get("email") or "None"
-                    print(f"✅ Found: {first_name} {last_name} | 📞 {phone} | 📧 {email}")
-                    row["Agent Phone"] = phone
-                    row["Agent Email"] = email
-                else:
-                    print(f"⚠️ No match found for {first_name} {last_name}")
-                    row["Agent Phone"] = ""
-                    row["Agent Email"] = ""
+                agent = data.get("data", {}).get("advertisers", [{}])[0]
+                row["Agent Name"] = agent.get("name", "")
+                row["Agent Phone"] = agent.get("phone", "")
+                row["Agent Email"] = agent.get("email", "")
 
-            except requests.exceptions.HTTPError as e:
-                print(f"❌ Apollo HTTP error for {first_name} {last_name}: {e.response.text}")
-                row["Agent Phone"] = ""
-                row["Agent Email"] = ""
-            except Exception as e:
-                print(f"❌ General error for {first_name} {last_name}: {e}")
+                print(f"✅ Found agent: {row['Agent Name']} | 📞 {row['Agent Phone']} | 📧 {row['Agent Email']}")
+
+            except requests.exceptions.RequestException as e:
+                print(f"❌ API error for MLS {mls_id}: {e}")
+                row["Agent Name"] = ""
                 row["Agent Phone"] = ""
                 row["Agent Email"] = ""
 
@@ -97,5 +80,5 @@ async def enrich_contacts(file: UploadFile = File(...)):
         writer.writeheader()
         writer.writerows(enriched_rows)
 
-    print(f"✅ File saved: {output_path}")
+    print(f"✅ Enriched file saved: {output_path}")
     return FileResponse(output_path, filename=os.path.basename(output_path))
