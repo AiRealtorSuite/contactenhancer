@@ -1,10 +1,37 @@
 <!DOCTYPE html>
 <html>
+<head>
+  <meta charset="UTF-8">
+  <title>AI Contact Enricher</title>
+</head>
 <body>
-  <h2>Test AI Contact Enricher Upload</h2>
-  <form action="/upload_csv" method="post" enctype="multipart/form-data">
-    <input type="file" name="file">
-    <input type="submit" value="Upload CSV">
+  <h2>Upload CSV for Apollo Enrichment</h2>
+  <form id="uploadForm" action="/upload_csv" method="post" enctype="multipart/form-data">
+    <input type="file" name="file" accept=".csv" required>
+    <br><br>
+    <button type="submit">Upload & Enrich</button>
   </form>
+
+  <script>
+    document.getElementById('uploadForm').addEventListener('submit', function(e) {
+      e.preventDefault();
+      const formData = new FormData(this);
+      fetch('/upload_csv', { method: 'POST', body: formData })
+        .then(res => {
+          if (!res.ok) throw new Error("Upload failed");
+          return res.blob();
+        })
+        .then(blob => {
+          const url = window.URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = 'enriched_contacts.csv';
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+        })
+        .catch(err => alert(err));
+    });
+  </script>
 </body>
 </html>
