@@ -4,7 +4,7 @@ import logging
 import requests
 import pandas as pd
 from fastapi import FastAPI, UploadFile, File
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from tempfile import NamedTemporaryFile
 
@@ -16,7 +16,7 @@ APOLLO_API_KEY = os.getenv("APOLLO_API_KEY", "")
 APOLLO_ORG_DOMAIN = os.getenv("APOLLO_ORG_DOMAIN", "").strip() or None
 
 # Your CSV column names
-MLS_COL   = "MLS Number"
+MLS_COL   = "MLS Number"   # kept for compatibility; not used in Apollo-only mode
 FIRST_COL = "First Name"
 LAST_COL  = "Last Name"
 
@@ -37,9 +37,70 @@ log = logging.getLogger("contact_enricher")
 # =======================
 # Routes
 # =======================
-@app.get("/")
-def home():
-    return {"message": "AI Contact Enricher API is running"}
+@app.get("/", response_class=HTMLResponse)
+def index():
+    # Option A: serve the upload form directly from the root (no static dir needed)
+    return """
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="UTF-8" />
+      <title>AI Contact Enricher</title>
+      <meta name="viewport" content="width=device-width, initial-scale=1" />
+      <style>
+        body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; max-width: 680px; margin: 40px auto; padding: 0 16px; }
+        h2 { margin: 0 0 12px; }
+        .card { border: 1px solid #eee; padding: 16px; border-radius: 12px; box-shadow: 0 4px 14px rgba(0,0,0,.06); }
+        .row { margin: 10px 0; }
+        button { padding: 10px 16px; border-radius: 10px; border: 0; cursor: pointer; }
+      </style>
+    </head>
+    <body>
+      <h2>Upload CSV for Apollo Enrichment</h2>
+      <div class="card">
+        <p>Expected headers: <b>MLS Number</b>, <b>First Name</b>, <b>Last Name</b></p>
+        <form id="uploadForm" method="post" enctype="multipart/form-data">
+          <div class="row">
+            <input type="file" name="file" accept=".csv" required />
+          </div>
+          <div class="row">
+            <button type="submit">Upload & Enrich</button>
+          </div>
+        </form>
+        <div id="status" class="row" style="color:#555;"></div>
+      </div>
+
+      <script>
+        const form = document.getElementById('uploadForm');
+        const statusEl = document.getElementById('status');
+
+        form.addEventListener('submit', async (e) => {
+          e.preventDefault();
+          statusEl.textContent = 'Uploading…';
+          const fd = new FormData(form);
+          try {
+            const res = await fetch('/upload_csv', { method: 'POST', body: fd });
+            if (!res.ok) {
+              const txt = await res.text();
+              throw new Error('Upload failed: ' + txt);
+            }
+            statusEl.textContent = 'Processing complete. Downloading…';
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = 'enriched_contacts.csv';
+            document.body.appendChild(a); a.click(); a.remove();
+            URL.revokeObjectURL(url);
+            statusEl.textContent = 'Done.';
+          } catch (err) {
+            alert(err.message || err);
+            statusEl.textContent = 'Error.';
+          }
+        });
+      </script>
+    </body>
+    </html>
+    """
 
 @app.get("/diag")
 def diag():
@@ -63,6 +124,7 @@ async def upload_csv(file: UploadFile = File(...)):
         except UnicodeDecodeError:
             df = pd.read_csv(io.BytesIO(raw), encoding="latin-1")
 
+        # Validate required columns
         missing = [c for c in [MLS_COL, FIRST_COL, LAST_COL] if c not in df.columns]
         if missing:
             return JSONResponse(
@@ -126,9 +188,9 @@ def apollo_lookup_name(full_name: str, org_domain: str | None = None):
     Returns ( {'Email','Phone'}, 'status_str' ) or (None, 'no_match')
     """
     url = "https://api.apollo.io/v1/mixed_people/search"
-    headers = {"X-Api-Key": APOLLO_API_KEY}  # <-- REQUIRED NOW
+    headers = {"X-Api-Key": APOLLO_API_KEY}  # REQUIRED
 
-    # Build optional org filter (must be in JSON, not querystring)
+    # Optional org domain filter (must be in JSON body)
     org_filter = {"q_organization_domains": [org_domain]} if org_domain else {}
 
     attempts = [
@@ -151,7 +213,6 @@ def apollo_lookup_name(full_name: str, org_domain: str | None = None):
                         return {"Email": email, "Phone": phone}, f"ok_variant_{i}"
                 # 200 but no results — try next variant
             else:
-                # Log first ~300 chars for debug, keep going
                 log.warning(f"Apollo {r.status_code} on variant {i} for {full_name}: {r.text[:300]}")
         except Exception as e:
             log.warning(f"Apollo exception on variant {i} for {full_name}: {e}")
